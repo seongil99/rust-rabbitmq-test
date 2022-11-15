@@ -1,78 +1,58 @@
-use futures::StreamExt;
-use rabbitmq_stream_client::{
-    types::{ByteCapacity, Message, OffsetSpecification},
-    Environment,
-};
-use tokio::sync::mpsc::channel;
-use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use futures_lite::StreamExt;
+use lapin::{options::*, types::FieldTable, Connection, ConnectionProperties};
+use tracing::info;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
-        .finish();
+fn main() {
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info");
+    }
 
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-    let environment = Environment::builder()
-        .host("localhost")
-        .port(5552)
-        .build()
-        .await?;
+    tracing_subscriber::fmt::init();
 
-    let message_count = 10;
+    let addr = std::env::var("AMQP_ADDR").unwrap_or_else(|_| "amqp://127.0.0.1:5672/%2f".into());
 
-    let _ = environment
-        .stream_creator()
-        .max_length(ByteCapacity::GB(2))
-        .create("test")
-        .await;
+    async_global_executor::block_on(async {
+        let conn = Connection::connect(&addr, ConnectionProperties::default())
+            .await
+            .expect("connection error");
 
-    let producer = environment.producer().build("test").await?;
+        info!("CONNECTED");
 
-    let (tx, mut rx) = channel(message_count);
-    for i in 0..message_count {
-        let tx_cloned = tx.clone();
-        producer
-            .send(
-                Message::builder().body(format!("message{}", i)).build(),
-                move |confirm_result| {
-                    info!("Message confirm result {:?}", confirm_result);
-                    let tx_cloned = tx_cloned.clone();
-                    async move {
-                        tx_cloned.send(()).await.unwrap();
-                    }
-                },
+        //receive channel
+        let channel = conn.create_channel().await.expect("create_channel");
+        info!(state=?conn.status().state());
+
+        let queue = channel
+            .queue_declare(
+                "hello",
+                QueueDeclareOptions::default(),
+                FieldTable::default(),
             )
-            .await?;
-    }
-    drop(tx);
+            .await
+            .expect("queue_declare");
+        info!(state=?conn.status().state());
+        info!(?queue, "Declared queue");
 
-    while (rx.recv().await).is_some() {}
+        info!("will consume");
+        let mut consumer = channel
+            .basic_consume(
+                "hello",
+                "my_consumer",
+                BasicConsumeOptions::default(),
+                FieldTable::default(),
+            )
+            .await
+            .expect("basic_consume");
+        info!(state=?conn.status().state());
 
-    producer.close().await?;
-
-    let mut consumer = environment
-        .consumer()
-        .offset(OffsetSpecification::First)
-        .build("test")
-        .await
-        .unwrap();
-
-    for _ in 0..message_count {
-        let delivery = consumer.next().await.unwrap()?;
-        info!(
-            "Got message : {:?} with offset {}",
-            delivery
-                .message()
-                .data()
-                .map(|data| String::from_utf8(data.to_vec())),
-            delivery.offset()
-        );
-    }
-
-    consumer.handle().close().await.unwrap();
-
-    environment.delete_stream("test").await?;
-    Ok(())
+        while let Some(delivery) = consumer.next().await {
+            info!(message=?delivery, "received message");
+            if let Ok(delivery) = delivery {
+                delivery
+                    .ack(BasicAckOptions::default())
+                    .await
+                    .expect("basic_ack");
+            }
+        }
+    })
 }
