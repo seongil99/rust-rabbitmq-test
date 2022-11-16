@@ -1,0 +1,1 @@
+{"code":"println!(\"Hello world!\");","lang":"rust"}

@@ -2,11 +2,9 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
 import pika
-import matplotlib
-matplotlib.use("TkAgg")
 
 HOST_NAME = 'localhost'
-QUEUE_NAME = 'hello'
+QUEUE_NAME = 'to_rust'
 
 
 def send_message():
