@@ -4,7 +4,7 @@ import pika
 # docker run -it --rm --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3.11-management
 
 HOST_NAME = 'localhost'
-QUEUE_NAME = 'test_queue'
+QUEUE_NAME = 'to_spring'
 
 
 def callback(ch, method, properties, body):
